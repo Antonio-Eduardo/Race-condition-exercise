@@ -3,10 +3,12 @@ package com.exercise.lockpessimist.laboratorio;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
 
 @Entity
 public class Laboratorio {
 
+    @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     private String nomeLaboratorio;
@@ -16,6 +18,7 @@ public class Laboratorio {
         this.nomeLaboratorio = nomeLaboratorio;
         this.computadores = computadores;
     }
+    public Laboratorio(){}
 
     public Long getId() {
         return id;

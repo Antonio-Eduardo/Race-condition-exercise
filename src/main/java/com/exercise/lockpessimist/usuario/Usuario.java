@@ -3,10 +3,12 @@ package com.exercise.lockpessimist.usuario;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
 
 @Entity
 public class Usuario {
 
+    @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
@@ -17,6 +19,7 @@ public class Usuario {
         this.nome = nome;
         this.cpf = cpf;
     }
+    public Usuario(){}
 
     public Long getId() {
         return id;
