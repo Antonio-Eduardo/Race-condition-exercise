@@ -7,7 +7,7 @@ API de reserva de laboratórios usada para reproduzir, e depois corrigir, um pro
 | 1. Reproduzir a condição de corrida | `fase-1/condicao-de-corrida` | Tema 1 (check-then-act, `Read Committed`) e Tema 3 (`ExecutorService`, latch de largada, Postgres real) | concluída |
 | 2. Corrigir com lock pessimista | `fase-2/lock-pessimista` | Tema 2 e Tema 3 (`TransactionTemplate`, latches para forçar ordem entre threads) | concluída |
 | 2b. Comparar com lock otimista | `fase-2/lock-otimista` | Tema 2 (`@Version`, `OPTIMISTIC_FORCE_INCREMENT`, falso conflito, quando usar cada um) | concluída |
-| 3. Garantir no banco com constraint de exclusão | `fase-3/constraint-exclusao` | Restante do Tema 1 (`EXCLUDE USING gist`, `btree_gist`, `tstzrange`, constraint parcial, SQLState, flush, tradução para 409) | planejada |
+| 3. Garantir no banco com constraint de exclusão | `fase-3/constraint-exclusao` | Restante do Tema 1 (`EXCLUDE USING gist`, `btree_gist`, `tstzrange`, constraint parcial, SQLState, flush, tradução para 409) | concluída |
 
 O Tema 3 não é uma fase própria: as técnicas de teste entram em cada fase, conforme o teste daquela fase precisa delas. O mesmo `ReservaConcorrenciaTest` é usado nas três fases, para comparar as soluções.
 
@@ -233,6 +233,144 @@ A divisão entre conflitos e falhas de versão muda a cada execução. Quem cheg
 docker compose up -d
 ./mvnw test -Dtest='Reserva*Test'
 ```
+
+## Fase 3: constraint de exclusão no banco
+
+Os dois locks da fase 2 só protegem quem os usa. Um script, uma importação em lote ou um novo método que insira reservas sem chamar `findParaReservaById` traria a corrida de volta. A fase 3 coloca a regra "não sobrepor horário" no próprio banco, onde ela vale para qualquer `INSERT`, venha de onde vier.
+
+### A constraint
+
+```sql
+ALTER TABLE reserva ADD CONSTRAINT reserva_sem_sobreposicao
+    EXCLUDE USING gist (                          -- proíba pares de linhas, usando um índice GiST
+        laboratorio_id WITH =,                    -- que tenham o mesmo laboratório
+        tstzrange(inicio, fim, '[)') WITH &&      -- e cujo intervalo [inicio, fim) se sobreponha
+    )
+    WHERE (status = 'AGENDADA');                  -- considerando só reservas ativas
+```
+
+**`EXCLUDE`: um `UNIQUE` com operador à escolha.** O `UNIQUE` só compara com igualdade: "não podem existir duas linhas com o mesmo CPF". Reservas das 14h às 16h e das 15h às 17h não são iguais, mas conflitam. O `EXCLUDE` permite escolher o operador de cada coluna. Um par de linhas é proibido só se **todas** as comparações derem verdadeiro ao mesmo tempo: mesmo laboratório **e** horários sobrepostos.
+
+**`tstzrange(inicio, fim, '[)')`: duas colunas viram um intervalo.** `range` é o tipo do Postgres para intervalos, e `tstz` é o `TIMESTAMPTZ` das colunas. O intervalo é calculado a partir de `inicio` e `fim`. Nenhuma coluna nova é criada.
+
+**`'[)'`: quais pontas pertencem ao intervalo.** `[` inclui a ponta, e `)` exclui. Uma reserva das 14h às 16h vale de 14:00 até um instante antes das 16:00. Assim, 14h-16h e 16h-18h não conflitam. Com `'[]'`, as duas teriam o instante 16:00 em comum, e horários colados seriam recusados.
+
+| Reserva A | Reserva B | `'[)'` | `'[]'` |
+|---|---|---|---|
+| 14h-16h | 16h-18h | sem conflito | conflito (16:00 nas duas) |
+| 14h-16h | 15h-17h | conflito | conflito |
+| 14h-16h | 17h-19h | sem conflito | sem conflito |
+
+É a mesma regra do `existeConflito` (`r.inicio < novoFim AND r.fim > novoInicio`, com comparações estritas). Aplicação e banco concordam sobre o que é conflito.
+
+**`&&`: "se sobrepõe".** Para ranges, `&&` é verdadeiro quando os dois intervalos têm pelo menos um ponto em comum. Não tem relação com o `&&` do Java.
+
+**`USING gist`: o índice que sabe responder "se sobrepõe".** Toda constraint desse tipo usa um índice para não comparar cada `INSERT` com a tabela inteira. O índice padrão, B-tree, ordena valores e responde igual, menor e maior, mas não sobreposição. O GiST (*Generalized Search Tree*) agrupa valores com "forma", como intervalos e áreas, em caixas que se contêm. Para achar o que cruza 14h-16h, ele descarta caixas inteiras sem olhar dentro delas.
+
+**`btree_gist`: igualdade dentro do GiST.** O GiST sabe comparar ranges com `&&`, mas não sabe comparar um `bigint` com `=`. A extensão `btree_gist` ensina isso a ele. Sem ela, o índice não consegue combinar `laboratorio_id WITH =` e o range `WITH &&`, e o `ALTER TABLE` falha.
+
+**`WHERE (status = 'AGENDADA')`: constraint parcial.** Reservas canceladas ficam fora da regra. Sem esse filtro, cancelar uma reserva não liberaria o horário.
+
+Num `INSERT` que viola a regra, o Postgres recusa com SQLState `23P01` (`exclusion_violation`).
+
+### A migration V3 e os dados que já existiam
+
+O banco de desenvolvimento tinha 90 pares de reservas agendadas sobrepostas, deixados pelas execuções do teste da fase 1. O Postgres valida as linhas existentes ao criar a constraint, então a V3 falharia. As decisões seguiram o que se faria em produção:
+
+- **Limpar na migration, não zerar o banco.** Em produção, não existe recriar o banco. A V3 corrige os dados antes de criar a constraint.
+- **Cancelar, não apagar.** O cancelamento é o soft delete do projeto e preserva o histórico. Reservas canceladas ficam fora da constraint.
+- **Quem reservou primeiro fica.** Entre reservas que conflitam, sobrevive a de menor `criado_em`, com desempate pelo menor `id`.
+- **Cancelamento atribuído a um usuário Sistema.** A V1 exige `cancelado_por`. Usar o dono da reserva registraria um cancelamento que ele não fez. A V3 cria o usuário `sistema` com CPF `00000000000`. CPFs com todos os dígitos iguais são inválidos pela regra do dígito verificador, então esse valor nunca coincide com uma pessoa real. As reservas canceladas pela migration ficam identificáveis por esse autor e pelo mesmo `cancelado_em`.
+
+A V3 executa, nesta ordem:
+
+1. `CREATE EXTENSION IF NOT EXISTS btree_gist`;
+2. cria o usuário Sistema;
+3. um bloco PL/pgSQL (`DO $$ ... $$`) que percorre as reservas agendadas da mais antiga para a mais nova e cancela uma reserva só se ela conflitar com uma **anterior que ainda esteja agendada**;
+4. cria a constraint.
+
+**Por que um loop, e não um `UPDATE` só.** Um `UPDATE ... WHERE EXISTS` avalia todas as linhas vendo o banco como estava antes do comando. Dentro do loop, cada volta enxerga os cancelamentos das anteriores. Isso importa em cadeias:
+
+| Volta | Reserva | Existe anterior agendada que conflita? | Resultado |
+|---|---|---|---|
+| 1 | A (14h-16h) | não há anterior | fica |
+| 2 | B (15h-17h) | A, que sobrepõe 15h-16h | cancelada |
+| 3 | C (16h-18h) | A não sobrepõe; B sobreporia, mas já foi cancelada | fica |
+
+Um `UPDATE` único ainda veria B como agendada e cancelaria C sem necessidade.
+
+**Atomicidade.** DDL no Postgres é transacional, e o Flyway roda a V3 numa transação. Se qualquer passo falhar, os quatro são desfeitos juntos. O banco nunca fica com a limpeza feita e sem a constraint.
+
+**Cuidados para produção:**
+- Antes de aplicar, rodar o mesmo critério como `SELECT`, para listar as reservas que serão canceladas e avisar os donos.
+- `ADD CONSTRAINT` trava a tabela `reserva` enquanto monta o índice. Numa tabela grande, a migration roda numa janela de manutenção.
+- O Flyway gratuito não desfaz migrations. Remover a constraint exige uma V4, e as reservas canceladas não voltam sozinhas.
+
+### Do banco até a resposta HTTP
+
+Quando a constraint recusa um `INSERT`, a exceção sobe em camadas:
+
+```
+DataIntegrityViolationException              (Spring)     <- o que o handler recebe
+  └ ConstraintViolationException             (Hibernate)  <- getConstraintName()
+      └ PSQLException, uma SQLException      (driver)     <- getSQLState() = "23P01"
+```
+
+O `GlobalExceptionHandler` trata `DataIntegrityViolationException` e decide pela causa:
+
+- **SQLState `23P01`:** responde **409 "Reserva conflitante"**, a mesma resposta da `ReservaConflitoException`. Para o cliente, tanto faz se quem detectou foi a aplicação ou o banco.
+- **Qualquer outra violação:** o handler relança a exceção e o Spring responde 500 sem expor a mensagem. Assim, um CPF repetido ou uma chave estrangeira inválida não vira "horário ocupado" por engano.
+
+`ex.getMostSpecificCause()` desce até a `SQLException`. O SQLState é verificado nela, e não na mensagem, porque o código é estável e a mensagem muda com versão e idioma do banco.
+
+**Flush.** O id usa `IDENTITY`, então o Hibernate executa o `INSERT` já no `save`, para obter o id. A violação estoura na linha do `save`, dentro do método, e não no commit.
+
+**Quando o conflito chega ao banco.** No caminho pessimista, o lock impede que duas reservas sobrepostas cheguem ao `INSERT`. A constraint só dispara quando alguém grava sem o lock. Se a outra transação ainda não commitou, o `INSERT` **espera** por ela, como faria com um `UNIQUE`: só depois do commit o Postgres sabe se existe conflito.
+
+### CPF duplicado
+
+Ao montar o handler, apareceu um problema que já existia: cadastrar ou atualizar um usuário com CPF repetido violava o `UNIQUE` da V1 (`23505`) e respondia 500. A correção usa o mesmo padrão de duas camadas da reserva:
+
+1. **No service, para a mensagem amigável.** `existsByCpf` no cadastro e `existsByCpfAndIdNot` na atualização (a busca ignora o próprio usuário, para ele poder salvar sem mudar o CPF). Se o CPF já pertence a outra pessoa, o service lança `CpfJaExistenteException` e a API responde 409.
+2. **No banco, como garantia final.** A verificação do service é um check-then-act: dois cadastros simultâneos passam juntos por ela. O `UNIQUE` recusa o segundo com `23505`, e o handler responde o mesmo 409.
+
+O handler reconhece o caso do CPF pelo **nome** da constraint, `usuario_cpf_key`, e não só pelo código. `23505` aparece em qualquer `UNIQUE`, e `nome_laboratorio` também é único. O nome vem do Hibernate (`ConstraintViolationException.getConstraintName()`). Atenção ao import: `jakarta.validation.ConstraintViolationException` é outra classe, da validação dos DTOs.
+
+`usuario_cpf_key` é o nome que o Postgres gerou, porque a V1 não deu nome à constraint (regra `<tabela>_<coluna>_key`). Para consultar os nomes: `\d usuario` no `psql`, ou `SELECT conname FROM pg_constraint WHERE conrelid = 'usuario'::regclass`. Nas próximas migrations, toda constraint recebe nome explícito, como `reserva_sem_sobreposicao`, para o código não depender de um nome gerado.
+
+### Testes da fase 3
+
+`ReservaConstraintTest` insere reservas direto pelo repository, sem passar pelo lock, para simular o código que esquece o lock:
+
+| Teste | O que prova |
+|---|---|
+| `bancoRecusaReservaSobrepostaMesmoSemLock` | 14h-16h e depois 15h-17h: o banco recusa a segunda com `23P01` |
+| `bancoAceitaHorarioColadoEHorarioDeReservaCancelada` | 16h-18h ao lado de 14h-16h é aceita (`'[)'`), e uma cancelada no mesmo horário também (`WHERE` parcial) |
+| `conflitoDetectadoPeloBancoViraHttp409` | A grava sem lock e segura o commit; B passa pelo lock e pelo `existeConflito`, o `INSERT` espera A e, depois do commit de A, a API responde 409 "Reserva conflitante" |
+
+Com a constraint, o teste de 10 threads do otimista muda de comportamento:
+
+```
+Resultado[sucessos=1, conflitos=0, falhasDeVersao=0, recusasDoBanco=9, reservasNoBanco=1]
+```
+
+As 9 perdedoras inseriram antes do commit do vencedor, esperaram por ele e foram recusadas pela constraint, antes de chegar à conferência de versão. Quem detecta o conflito passou a ser o banco. O teste conta as três formas de perder (conflito de horário, falha de versão e recusa do banco) e exige 1 sucesso e 1 reserva no banco.
+
+```
+docker compose up -d
+./mvnw test
+```
+
+## Conclusão
+
+| Camada | Protege contra | Não protege contra |
+|---|---|---|
+| `existeConflito` sozinho (fase 1) | reservas feitas uma de cada vez | requisições simultâneas |
+| Lock pessimista (fase 2) | requisições simultâneas que passam pelo lock | código que grava sem o lock |
+| Lock otimista (fase 2b) | requisições simultâneas, sem espera | falso conflito; código que grava sem o lock |
+| Constraint de exclusão (fase 3) | qualquer `INSERT`, de qualquer origem | nada nessa regra; a mensagem de erro ao cliente depende do handler |
+
+As camadas se somam. O lock organiza a fila e devolve a resposta de negócio sem desperdiçar trabalho. A constraint é a garantia final, que vale mesmo quando alguém esquece o lock.
 
 ## Tema 1: Duas reservas no mesmo instante
 
