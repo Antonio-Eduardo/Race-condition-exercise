@@ -7,6 +7,7 @@ import com.exercise.lockpessimist.usuario.UsuarioRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
@@ -14,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -34,6 +36,26 @@ class ReservaConcorrenciaTest {
 
     @Test
     void apenasUmaReservaDeveSerCriadaParaOMesmoHorario() throws InterruptedException {
+        Resultado resultado = disputarMesmoHorario(reservaService::criarReserva);
+
+        // Pessimista: quem perde espera o lock e recebe a resposta de negócio
+        assertThat(resultado.sucessos()).isEqualTo(1);
+        assertThat(resultado.conflitos()).isEqualTo(THREADS - 1);
+        assertThat(resultado.reservasNoBanco()).isEqualTo(1);
+    }
+
+    @Test
+    void lockOtimistaTambemDeixaApenasUmaReserva() throws InterruptedException {
+        Resultado resultado = disputarMesmoHorario(reservaService::criarReservaOtimista);
+
+        // Otimista: quem perde pode receber conflito de negócio (chegou depois do commit)
+        // ou falha de versão (leu a mesma versão e perdeu no commit)
+        assertThat(resultado.sucessos()).isEqualTo(1);
+        assertThat(resultado.conflitos() + resultado.falhasDeVersao()).isEqualTo(THREADS - 1);
+        assertThat(resultado.reservasNoBanco()).isEqualTo(1);
+    }
+
+    private Resultado disputarMesmoHorario(Function<ReservaDtoRequest, ReservaDtoResponse> criar) throws InterruptedException {
         // Laboratório e usuário novos a cada execução, para não misturar com os dados do Postman
         long sufixo = System.nanoTime();
         Laboratorio laboratorio = laboratorioRepository.save(new Laboratorio("T" + sufixo % 100000, 10));
@@ -49,15 +71,18 @@ class ReservaConcorrenciaTest {
         CountDownLatch largada = new CountDownLatch(1);
         AtomicInteger sucessos = new AtomicInteger();
         AtomicInteger conflitos = new AtomicInteger();
+        AtomicInteger falhasDeVersao = new AtomicInteger();
 
         for (int i = 0; i < THREADS; i++) {
             executor.submit(() -> {
                 largada.await();
                 try {
-                    reservaService.criarReserva(request);
+                    criar.apply(request);
                     sucessos.incrementAndGet();
                 } catch (ReservaConflitoException e) {
                     conflitos.incrementAndGet();
+                } catch (ObjectOptimisticLockingFailureException e) {
+                    falhasDeVersao.incrementAndGet();
                 }
                 return null;
             });
@@ -70,11 +95,14 @@ class ReservaConcorrenciaTest {
         long reservasNoBanco = reservaRepository.findAll().stream()
                 .filter(r -> r.getLaboratorio().getId().equals(laboratorio.getId()))
                 .count();
-        System.out.printf("sucessos=%d conflitos=%d reservasNoBanco=%d%n", sucessos.get(), conflitos.get(), reservasNoBanco);
+        Resultado resultado = new Resultado(sucessos.get(), conflitos.get(), falhasDeVersao.get(), reservasNoBanco);
+        System.out.println(resultado);
 
         // Se alguma thread falhou por outro motivo, a soma não fecha e o teste não mede a corrida
-        assertThat(sucessos.get() + conflitos.get()).isEqualTo(THREADS);
-        assertThat(sucessos.get()).isEqualTo(1);
-        assertThat(reservasNoBanco).isEqualTo(1);
+        assertThat(resultado.sucessos() + resultado.conflitos() + resultado.falhasDeVersao()).isEqualTo(THREADS);
+        return resultado;
+    }
+
+    private record Resultado(int sucessos, int conflitos, int falhasDeVersao, long reservasNoBanco) {
     }
 }

@@ -12,6 +12,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -43,6 +44,8 @@ class ReservaLockTest {
     private LaboratorioRepository laboratorioRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
+    @Autowired
+    private ReservaRepository reservaRepository;
     @Autowired
     private TransactionTemplate transactionTemplate;
     @Autowired
@@ -158,6 +161,64 @@ class ReservaLockTest {
     }
 
     @Test
+    void pessimistaAceitaHorariosDiferentesNoMesmoLaboratorio() throws Exception {
+        Laboratorio laboratorio = novoLaboratorio();
+        Usuario usuario = novoUsuario();
+        ReservaDtoRequest manha = horario(laboratorio, usuario, "2030-01-10T08:00:00Z", "2030-01-10T10:00:00Z");
+        ReservaDtoRequest tarde = horario(laboratorio, usuario, "2030-01-10T14:00:00Z", "2030-01-10T16:00:00Z");
+
+        CountDownLatch aCriou = new CountDownLatch(1);
+        CountDownLatch liberarA = new CountDownLatch(1);
+
+        Future<?> a = executor.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+            reservaService.criarReserva(manha);
+            aCriou.countDown();
+            aguardar(liberarA);
+        }));
+        assertThat(aCriou.await(10, TimeUnit.SECONDS)).isTrue();
+
+        Future<?> b = executor.submit(() -> reservaService.criarReserva(tarde));
+        aguardarSessaoEsperandoLock();
+
+        liberarA.countDown();
+
+        // B esperou, mas depois não encontrou conflito de horário: os dois gravam
+        a.get(10, TimeUnit.SECONDS);
+        b.get(10, TimeUnit.SECONDS);
+        assertThat(reservasDoLaboratorio(laboratorio)).isEqualTo(2);
+    }
+
+    @Test
+    void otimistaRecusaHorariosDiferentesNoMesmoLaboratorio() throws Exception {
+        Laboratorio laboratorio = novoLaboratorio();
+        Usuario usuario = novoUsuario();
+        ReservaDtoRequest manha = horario(laboratorio, usuario, "2030-01-10T08:00:00Z", "2030-01-10T10:00:00Z");
+        ReservaDtoRequest tarde = horario(laboratorio, usuario, "2030-01-10T14:00:00Z", "2030-01-10T16:00:00Z");
+
+        CountDownLatch aCriou = new CountDownLatch(1);
+        CountDownLatch liberarA = new CountDownLatch(1);
+
+        // A lê a versão e insere, mas só tenta o commit depois que B terminar
+        Future<?> a = executor.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+            reservaService.criarReservaOtimista(manha);
+            aCriou.countDown();
+            aguardar(liberarA);
+        }));
+        assertThat(aCriou.await(10, TimeUnit.SECONDS)).isTrue();
+
+        // B não espera ninguém: lê a mesma versão, grava e sobe a versão do laboratório
+        reservaService.criarReservaOtimista(tarde);
+
+        liberarA.countDown();
+
+        // A perde no commit sem nenhum conflito de horário: falso conflito
+        Throwable erroA = catchThrowable(() -> a.get(10, TimeUnit.SECONDS));
+        assertThat(erroA).isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(ObjectOptimisticLockingFailureException.class);
+        assertThat(reservasDoLaboratorio(laboratorio)).isEqualTo(1);
+    }
+
+    @Test
     void travarLaboratoriosEmOrdensOpostasGeraDeadlock() throws Exception {
         Long lab1 = novoLaboratorio().getId();
         Long lab2 = novoLaboratorio().getId();
@@ -220,6 +281,16 @@ class ReservaLockTest {
             }
         }
         return null;
+    }
+
+    private static ReservaDtoRequest horario(Laboratorio laboratorio, Usuario usuario, String inicio, String fim) {
+        return new ReservaDtoRequest(Instant.parse(inicio), Instant.parse(fim), laboratorio.getId(), usuario.getId());
+    }
+
+    private long reservasDoLaboratorio(Laboratorio laboratorio) {
+        return reservaRepository.findAll().stream()
+                .filter(r -> r.getLaboratorio().getId().equals(laboratorio.getId()))
+                .count();
     }
 
     // Dados novos a cada execução, para não misturar com os dados do Postman
