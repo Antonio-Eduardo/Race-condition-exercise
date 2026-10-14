@@ -14,4 +14,7 @@ public interface LaboratorioRepository extends JpaRepository<Laboratorio, Long> 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "2000")})
     Optional<Laboratorio> findParaReservaById(Long id);
+
+    @Lock(LockModeType.OPTIMISTIC_FORCE_INCREMENT)
+    Optional<Laboratorio> findParaReservaOtimistaById(Long id);
 }

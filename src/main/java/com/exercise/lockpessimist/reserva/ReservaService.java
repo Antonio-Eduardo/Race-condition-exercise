@@ -51,17 +51,24 @@ public class ReservaService {
 
     @Transactional
     public ReservaDtoResponse criarReserva(ReservaDtoRequest request) {
-        Duration duracao = Duration.between(request.inicio(), request.fim());
-        if (duracao.compareTo(props.minimo()) < 0) {
-            throw new ReservaDuracaoException("Duração é menor que a duração minima permitida. Duracao: " + duracao.toMinutes() + " minutos. Duração minima: " + props.minimo().toMinutes() + " minutos");
-        } else if (duracao.compareTo(props.maximo()) > 0) {
-            throw new ReservaDuracaoException("Duração é maior que a duração maxima permitida. Duração: " + duracao.toMinutes() + " minutos. Duração maxima: " + props.maximo().toMinutes() + " minutos");
-        } else if (duracao.toSeconds() % props.bloco().toSeconds() > 0) {
-            throw new ReservaDuracaoException("Duração deve ser multipla do bloco permitido. Duração: " + duracao.toMinutes() + " minutos. Duração bloco: " + props.bloco().toMinutes() + " minutos");
-        } else if (request.inicio().getNano() != 0 || request.inicio().getEpochSecond() % props.bloco().toSeconds() > 0) {
-            throw new ReservaDuracaoException("A reserva deve começar em um horario fechado. Inicio: " + request.inicio());
-        }
+        verificarDuracao(request);
         Laboratorio laboratorio = laboratorioRepository.findParaReservaById(request.idLaboratorio())
+                .orElseThrow(() -> new RecursoNaoEncontradoException("Laboratorio " + request.idLaboratorio() + " não encontrado"));
+        if (reservaRepository.existeConflito(request.idLaboratorio(),request.inicio(),request.fim(), ReservaStatus.AGENDADA)) {
+            throw new ReservaConflitoException("A reserva conflita com uma reserva já existente");
+        }
+        Usuario usuario = usuarioRepository.findById(request.idUsuario())
+                .orElseThrow(() -> new RecursoNaoEncontradoException("Usuario " + request.idUsuario() + " não encontrado"));
+        Instant agora = Instant.now(clock);
+        Reserva reserva = ReservaDtoRequest.toEntity(request, laboratorio, usuario);
+        reserva.setCriadoEm(agora);
+        reservaRepository.save(reserva);
+        return ReservaDtoResponse.toResponse(reserva, agora);
+    }
+    @Transactional
+    public ReservaDtoResponse criarReservaOtimista(ReservaDtoRequest request) {
+        verificarDuracao(request);
+        Laboratorio laboratorio = laboratorioRepository.findParaReservaOtimistaById(request.idLaboratorio())
                 .orElseThrow(() -> new RecursoNaoEncontradoException("Laboratorio " + request.idLaboratorio() + " não encontrado"));
         if (reservaRepository.existeConflito(request.idLaboratorio(),request.inicio(),request.fim(), ReservaStatus.AGENDADA)) {
             throw new ReservaConflitoException("A reserva conflita com uma reserva já existente");
@@ -99,5 +106,17 @@ public class ReservaService {
         reserva.setCanceladoPor(usuario);
         reserva.setStatus(ReservaStatus.CANCELADA);
         return ReservaDtoResponse.toResponse(reserva, agora);
+    }
+    private void verificarDuracao(ReservaDtoRequest request){
+        Duration duracao = Duration.between(request.inicio(), request.fim());
+        if (duracao.compareTo(props.minimo()) < 0) {
+            throw new ReservaDuracaoException("Duração é menor que a duração minima permitida. Duracao: " + duracao.toMinutes() + " minutos. Duração minima: " + props.minimo().toMinutes() + " minutos");
+        } else if (duracao.compareTo(props.maximo()) > 0) {
+            throw new ReservaDuracaoException("Duração é maior que a duração maxima permitida. Duração: " + duracao.toMinutes() + " minutos. Duração maxima: " + props.maximo().toMinutes() + " minutos");
+        } else if (duracao.toSeconds() % props.bloco().toSeconds() > 0) {
+            throw new ReservaDuracaoException("Duração deve ser multipla do bloco permitido. Duração: " + duracao.toMinutes() + " minutos. Duração bloco: " + props.bloco().toMinutes() + " minutos");
+        } else if (request.inicio().getNano() != 0 || request.inicio().getEpochSecond() % props.bloco().toSeconds() > 0) {
+            throw new ReservaDuracaoException("A reserva deve começar em um horario fechado. Inicio: " + request.inicio());
+        }
     }
 }

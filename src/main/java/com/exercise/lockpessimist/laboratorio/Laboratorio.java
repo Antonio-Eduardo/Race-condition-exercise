@@ -11,12 +11,18 @@ public class Laboratorio {
     @Column(name = "nome_laboratorio")
     private String nomeLaboratorio;
     private Integer computadores;
+    @Version
+    private Long version;
 
     public Laboratorio(String nomeLaboratorio, Integer computadores){
         this.nomeLaboratorio = nomeLaboratorio;
         this.computadores = computadores;
     }
     public Laboratorio(){}
+
+    public Long getVersion() {
+        return version;
+    }
 
     public Long getId() {
         return id;

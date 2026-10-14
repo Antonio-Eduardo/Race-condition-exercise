@@ -6,6 +6,7 @@ import com.exercise.lockpessimist.reserva.ReservaNaoCancelavelException;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -42,6 +43,12 @@ public class GlobalExceptionHandler {
     public ProblemDetail handleLockTimeOut(CannotAcquireLockException ex){
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "O laboratório está sendo reservado por outra requisição. Tente novamente.");
         problem.setTitle("Laboratório ocupado");
+        return problem;
+    }
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ProblemDetail handleOptimisticLockFailure(ObjectOptimisticLockingFailureException ex){
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "O laboratório está sendo reservado por outra requisição. Tente novamente.");
+        problem.setTitle("Laboratorio ocupado");
         return problem;
     }
 }

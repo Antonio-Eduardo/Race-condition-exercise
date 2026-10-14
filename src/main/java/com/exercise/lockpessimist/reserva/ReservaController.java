@@ -36,4 +36,10 @@ public class ReservaController {
         ReservaDtoResponse response = reservaService.cancelar(reservaId,cancelarDto);
         return ResponseEntity.ok(response);
     }
+    @PostMapping("/otimista")
+    public ResponseEntity<ReservaDtoResponse> criarReservaOtimista(@Valid@RequestBody ReservaDtoRequest request){
+        ReservaDtoResponse reservaDtoResponse = reservaService.criarReservaOtimista(request);
+        URI uri = URI.create("/reservas/"+reservaDtoResponse.id());
+        return ResponseEntity.created(uri).body(reservaDtoResponse);
+    }
 }
