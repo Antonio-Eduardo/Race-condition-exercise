@@ -3,6 +3,7 @@ package com.exercise.lockpessimist.config;
 import com.exercise.lockpessimist.reserva.ReservaConflitoException;
 import com.exercise.lockpessimist.reserva.ReservaDuracaoException;
 import com.exercise.lockpessimist.reserva.ReservaNaoCancelavelException;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -35,6 +36,12 @@ public class GlobalExceptionHandler {
     public ProblemDetail handleReservaConflitante(ReservaConflitoException ex){
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
         problem.setTitle("Reserva conflitante");
+        return problem;
+    }
+    @ExceptionHandler(CannotAcquireLockException.class)
+    public ProblemDetail handleLockTimeOut(CannotAcquireLockException ex){
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "O laboratório está sendo reservado por outra requisição. Tente novamente.");
+        problem.setTitle("Laboratório ocupado");
         return problem;
     }
 }

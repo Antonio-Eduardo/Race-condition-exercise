@@ -35,18 +35,21 @@ public class ReservaService {
         this.props = props;
     }
 
+    @Transactional
     public List<ReservaDtoResponse> listarReservas() {
         Instant agora = Instant.now(clock);
         return reservaRepository.findAll().stream()
                 .map(reserva -> ReservaDtoResponse.toResponse(reserva, agora)).toList();
     }
 
+    @Transactional
     public ReservaDtoResponse reservaPorId(Long id) {
         Reserva reserva = reservaRepository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Reserva " + id + " não encontrada"));
         Instant agora = Instant.now(clock);
         return ReservaDtoResponse.toResponse(reserva, agora);
     }
 
+    @Transactional
     public ReservaDtoResponse criarReserva(ReservaDtoRequest request) {
         Duration duracao = Duration.between(request.inicio(), request.fim());
         if (duracao.compareTo(props.minimo()) < 0) {
@@ -58,7 +61,7 @@ public class ReservaService {
         } else if (request.inicio().getNano() != 0 || request.inicio().getEpochSecond() % props.bloco().toSeconds() > 0) {
             throw new ReservaDuracaoException("A reserva deve começar em um horario fechado. Inicio: " + request.inicio());
         }
-        Laboratorio laboratorio = laboratorioRepository.findById(request.idLaboratorio())
+        Laboratorio laboratorio = laboratorioRepository.findParaReservaById(request.idLaboratorio())
                 .orElseThrow(() -> new RecursoNaoEncontradoException("Laboratorio " + request.idLaboratorio() + " não encontrado"));
         if (reservaRepository.existeConflito(request.idLaboratorio(),request.inicio(),request.fim(), ReservaStatus.AGENDADA)) {
             throw new ReservaConflitoException("A reserva conflita com uma reserva já existente");
