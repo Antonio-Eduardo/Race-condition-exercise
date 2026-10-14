@@ -60,6 +60,9 @@ public class ReservaService {
         }
         Laboratorio laboratorio = laboratorioRepository.findById(request.idLaboratorio())
                 .orElseThrow(() -> new RecursoNaoEncontradoException("Laboratorio " + request.idLaboratorio() + " não encontrado"));
+        if (reservaRepository.existeConflito(request.idLaboratorio(),request.inicio(),request.fim(), ReservaStatus.AGENDADA)) {
+            throw new ReservaConflitoException("A reserva conflita com uma reserva já existente");
+        }
         Usuario usuario = usuarioRepository.findById(request.idUsuario())
                 .orElseThrow(() -> new RecursoNaoEncontradoException("Usuario " + request.idUsuario() + " não encontrado"));
         Instant agora = Instant.now(clock);

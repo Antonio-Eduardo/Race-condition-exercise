@@ -1,5 +1,6 @@
 package com.exercise.lockpessimist.config;
 
+import com.exercise.lockpessimist.reserva.ReservaConflitoException;
 import com.exercise.lockpessimist.reserva.ReservaDuracaoException;
 import com.exercise.lockpessimist.reserva.ReservaNaoCancelavelException;
 import org.springframework.http.HttpStatus;
@@ -28,6 +29,12 @@ public class GlobalExceptionHandler {
     public ProblemDetail handleDuracaoInvalida(ReservaDuracaoException ex){
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
         problem.setTitle("Duração invalida");
+        return problem;
+    }
+    @ExceptionHandler(ReservaConflitoException.class)
+    public ProblemDetail handleReservaConflitante(ReservaConflitoException ex){
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
+        problem.setTitle("Reserva conflitante");
         return problem;
     }
 }
