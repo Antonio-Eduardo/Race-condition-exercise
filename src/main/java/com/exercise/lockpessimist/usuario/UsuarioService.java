@@ -17,6 +17,9 @@ public class UsuarioService {
 
     @Transactional
     public UsuarioDtoResponse criarUsuario(UsuarioDtoRequest usuarioDtoRequest){
+       if (usuarioRepository.existsByCpf(usuarioDtoRequest.cpf())){
+           throw new CpfJaExistenteException("O CPF conflita com um CPF existente");
+        }
         Usuario usuario = new Usuario();
         usuario.setNome(usuarioDtoRequest.nome());
         usuario.setCpf(usuarioDtoRequest.cpf());
@@ -37,6 +40,10 @@ public class UsuarioService {
     @Transactional
     public UsuarioDtoResponse atualizarUsuario(Long id, UsuarioUpdateDto usuarioDtoRequest){
         Usuario usuario = usuarioRepository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Usuario " + id + " não encontrado"));
+
+        if (usuarioDtoRequest.cpf() != null && usuarioRepository.existsByCpfAndIdNot(usuarioDtoRequest.cpf(),id)){
+            throw new CpfJaExistenteException("O CPF conflita com um CPF existente");
+        }
 
         usuario.setNome(usuarioDtoRequest.nome() != null
                 ? usuarioDtoRequest.nome()

@@ -3,6 +3,8 @@ package com.exercise.lockpessimist.config;
 import com.exercise.lockpessimist.reserva.ReservaConflitoException;
 import com.exercise.lockpessimist.reserva.ReservaDuracaoException;
 import com.exercise.lockpessimist.reserva.ReservaNaoCancelavelException;
+import com.exercise.lockpessimist.usuario.CpfJaExistenteException;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -65,6 +67,19 @@ public class GlobalExceptionHandler {
             problem.setTitle("Reserva conflitante");
             return  problem;
         }
+        if (ex.getCause() instanceof ConstraintViolationException violacao
+        && "usuario_cpf_key".equals(violacao.getConstraintName())){
+            ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "O CPF conflita com um CPF existente");
+            problem.setTitle("CPF já existente");
+            return problem;
+        }
         throw ex;
     }
+    @ExceptionHandler(CpfJaExistenteException.class)
+    public ProblemDetail handleCpfJaExistente(CpfJaExistenteException ex){
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
+        problem.setTitle("CPF já existente");
+        return problem;
+    }
+
 }
