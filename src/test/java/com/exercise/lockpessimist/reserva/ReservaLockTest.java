@@ -16,7 +16,6 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.sql.SQLException;
 import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -25,6 +24,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import static com.exercise.lockpessimist.reserva.ConcorrenciaTestes.aguardar;
+import static com.exercise.lockpessimist.reserva.ConcorrenciaTestes.aguardarSessaoEsperandoLock;
+import static com.exercise.lockpessimist.reserva.ConcorrenciaTestes.novoLaboratorio;
+import static com.exercise.lockpessimist.reserva.ConcorrenciaTestes.novoUsuario;
+import static com.exercise.lockpessimist.reserva.ConcorrenciaTestes.sqlState;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.hamcrest.Matchers.not;
@@ -62,8 +66,8 @@ class ReservaLockTest {
 
     @Test
     void segundaReservaEsperaOLockEDepoisVeOConflito() throws Exception {
-        Laboratorio laboratorio = novoLaboratorio();
-        Usuario usuario = novoUsuario();
+        Laboratorio laboratorio = novoLaboratorio(laboratorioRepository);
+        Usuario usuario = novoUsuario(usuarioRepository);
         ReservaDtoRequest request = new ReservaDtoRequest(
                 Instant.parse("2030-01-10T14:00:00Z"),
                 Instant.parse("2030-01-10T16:00:00Z"),
@@ -84,7 +88,7 @@ class ReservaLockTest {
         Future<?> b = executor.submit(() -> reservaService.criarReserva(request));
 
         // Prova pelo próprio Postgres que B está parada esperando um lock, sem depender de sleep
-        aguardarSessaoEsperandoLock();
+        aguardarSessaoEsperandoLock(jdbcTemplate);
         assertThat(b.isDone()).isFalse();
 
         liberarA.countDown();
@@ -98,8 +102,8 @@ class ReservaLockTest {
 
     @Test
     void segundaReservaDesisteDepoisDoTimeoutDoLock() throws Exception {
-        Laboratorio laboratorio = novoLaboratorio();
-        Usuario usuario = novoUsuario();
+        Laboratorio laboratorio = novoLaboratorio(laboratorioRepository);
+        Usuario usuario = novoUsuario(usuarioRepository);
         ReservaDtoRequest request = new ReservaDtoRequest(
                 Instant.parse("2030-01-10T14:00:00Z"),
                 Instant.parse("2030-01-10T16:00:00Z"),
@@ -132,8 +136,8 @@ class ReservaLockTest {
 
     @Test
     void timeoutDoLockViraRespostaHttp503SemExporOSql() throws Exception {
-        Laboratorio laboratorio = novoLaboratorio();
-        Usuario usuario = novoUsuario();
+        Laboratorio laboratorio = novoLaboratorio(laboratorioRepository);
+        Usuario usuario = novoUsuario(usuarioRepository);
         String corpo = """
                 {"inicio": "2030-01-10T14:00:00Z", "fim": "2030-01-10T16:00:00Z", "idLaboratorio": %d, "idUsuario": %d}
                 """.formatted(laboratorio.getId(), usuario.getId());
@@ -162,8 +166,8 @@ class ReservaLockTest {
 
     @Test
     void pessimistaAceitaHorariosDiferentesNoMesmoLaboratorio() throws Exception {
-        Laboratorio laboratorio = novoLaboratorio();
-        Usuario usuario = novoUsuario();
+        Laboratorio laboratorio = novoLaboratorio(laboratorioRepository);
+        Usuario usuario = novoUsuario(usuarioRepository);
         ReservaDtoRequest manha = horario(laboratorio, usuario, "2030-01-10T08:00:00Z", "2030-01-10T10:00:00Z");
         ReservaDtoRequest tarde = horario(laboratorio, usuario, "2030-01-10T14:00:00Z", "2030-01-10T16:00:00Z");
 
@@ -178,7 +182,7 @@ class ReservaLockTest {
         assertThat(aCriou.await(10, TimeUnit.SECONDS)).isTrue();
 
         Future<?> b = executor.submit(() -> reservaService.criarReserva(tarde));
-        aguardarSessaoEsperandoLock();
+        aguardarSessaoEsperandoLock(jdbcTemplate);
 
         liberarA.countDown();
 
@@ -190,8 +194,8 @@ class ReservaLockTest {
 
     @Test
     void otimistaRecusaHorariosDiferentesNoMesmoLaboratorio() throws Exception {
-        Laboratorio laboratorio = novoLaboratorio();
-        Usuario usuario = novoUsuario();
+        Laboratorio laboratorio = novoLaboratorio(laboratorioRepository);
+        Usuario usuario = novoUsuario(usuarioRepository);
         ReservaDtoRequest manha = horario(laboratorio, usuario, "2030-01-10T08:00:00Z", "2030-01-10T10:00:00Z");
         ReservaDtoRequest tarde = horario(laboratorio, usuario, "2030-01-10T14:00:00Z", "2030-01-10T16:00:00Z");
 
@@ -220,8 +224,8 @@ class ReservaLockTest {
 
     @Test
     void travarLaboratoriosEmOrdensOpostasGeraDeadlock() throws Exception {
-        Long lab1 = novoLaboratorio().getId();
-        Long lab2 = novoLaboratorio().getId();
+        Long lab1 = novoLaboratorio(laboratorioRepository).getId();
+        Long lab2 = novoLaboratorio(laboratorioRepository).getId();
 
         // Garante que cada transação já tem o primeiro lock antes de pedir o segundo
         CountDownLatch primeirosLocks = new CountDownLatch(2);
@@ -249,40 +253,6 @@ class ReservaLockTest {
         });
     }
 
-    private void aguardarSessaoEsperandoLock() throws InterruptedException {
-        long limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (System.nanoTime() < limite) {
-            Integer esperando = jdbcTemplate.queryForObject(
-                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
-                    Integer.class);
-            if (esperando != null && esperando > 0) {
-                return;
-            }
-            Thread.sleep(20);
-        }
-        throw new AssertionError("nenhuma sessão ficou esperando lock em 10s");
-    }
-
-    private static void aguardar(CountDownLatch latch) {
-        try {
-            if (!latch.await(10, TimeUnit.SECONDS)) {
-                throw new IllegalStateException("latch não liberado em 10s");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(e);
-        }
-    }
-
-    private static String sqlState(Throwable erro) {
-        for (Throwable t = erro; t != null; t = t.getCause()) {
-            if (t instanceof SQLException sql) {
-                return sql.getSQLState();
-            }
-        }
-        return null;
-    }
-
     private static ReservaDtoRequest horario(Laboratorio laboratorio, Usuario usuario, String inicio, String fim) {
         return new ReservaDtoRequest(Instant.parse(inicio), Instant.parse(fim), laboratorio.getId(), usuario.getId());
     }
@@ -291,14 +261,5 @@ class ReservaLockTest {
         return reservaRepository.findAll().stream()
                 .filter(r -> r.getLaboratorio().getId().equals(laboratorio.getId()))
                 .count();
-    }
-
-    // Dados novos a cada execução, para não misturar com os dados do Postman
-    private Laboratorio novoLaboratorio() {
-        return laboratorioRepository.save(new Laboratorio("L" + System.nanoTime() % 100000, 10));
-    }
-
-    private Usuario novoUsuario() {
-        return usuarioRepository.save(new Usuario("Teste", String.format("%011d", System.nanoTime() % 100_000_000_000L)));
     }
 }
