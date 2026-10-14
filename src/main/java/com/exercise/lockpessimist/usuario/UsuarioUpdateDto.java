@@ -1,4 +1,6 @@
 package com.exercise.lockpessimist.usuario;
 
-public record UsuarioUpdateDto(String nome, String cpf) {
+import jakarta.validation.constraints.Size;
+
+public record UsuarioUpdateDto(@Size(max = 50) String nome, @Size(max = 11) String cpf) {
 }
