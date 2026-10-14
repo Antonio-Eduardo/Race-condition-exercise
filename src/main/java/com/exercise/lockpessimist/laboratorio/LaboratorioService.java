@@ -1,8 +1,8 @@
 package com.exercise.lockpessimist.laboratorio;
 
-import jakarta.persistence.EntityNotFoundException;
-import jakarta.transaction.Transactional;
+import com.exercise.lockpessimist.config.RecursoNaoEncontradoException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -21,7 +21,7 @@ public class LaboratorioService {
     }
     @Transactional
     public LaboratorioDtoResponse laboratorioPorId(Long id){
-        Laboratorio laboratorio = laboratorioRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Laboratorio Não encontrado " + id));
+        Laboratorio laboratorio = laboratorioRepository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Laboratorio " + id + " não encontrado"));
         return LaboratorioDtoResponse.toResponse(laboratorio);
     }
 
@@ -36,7 +36,7 @@ public class LaboratorioService {
 
     @Transactional
     public LaboratorioDtoResponse atualizarLaboratorio(Long id, LaboratorioUpdateDto request){
-        Laboratorio laboratorio = laboratorioRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Laboratorio não encontrado " + id));
+        Laboratorio laboratorio = laboratorioRepository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Laboratorio " + id + " não encontrado"));
 
         laboratorio.setNomeLaboratorio(request.nomeLaboratorio() != null
                 ? request.nomeLaboratorio()
@@ -50,7 +50,7 @@ public class LaboratorioService {
     }
     @Transactional
     public void deletarLaboratorio(Long id){
-        Laboratorio laboratorio = laboratorioRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Laboratorio não encontrado " + id));
+        Laboratorio laboratorio = laboratorioRepository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Laboratorio " + id + " não encontrado"));
         laboratorioRepository.delete(laboratorio);
     }
 }

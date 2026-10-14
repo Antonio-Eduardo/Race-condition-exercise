@@ -1,8 +1,9 @@
 package com.exercise.lockpessimist.usuario;
 
-import jakarta.persistence.EntityNotFoundException;
-import jakarta.transaction.Transactional;
+import com.exercise.lockpessimist.config.RecursoNaoEncontradoException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import java.util.List;
 
 @Service
@@ -30,12 +31,12 @@ public class UsuarioService {
 
     @Transactional
     public UsuarioDtoResponse getUsuario(Long id){
-        Usuario usuario = usuarioRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Usuario não encontrado " + id));
+        Usuario usuario = usuarioRepository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Usuario " + id + " não encontrado"));
         return UsuarioDtoResponse.toResponse(usuario);
     }
     @Transactional
     public UsuarioDtoResponse atualizarUsuario(Long id, UsuarioUpdateDto usuarioDtoRequest){
-        Usuario usuario = usuarioRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Usuario não encontrado " + id));
+        Usuario usuario = usuarioRepository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Usuario " + id + " não encontrado"));
 
         usuario.setNome(usuarioDtoRequest.nome() != null
                 ? usuarioDtoRequest.nome()
@@ -49,7 +50,7 @@ public class UsuarioService {
     }
     @Transactional
     public void deletarUsuario(Long id){
-        Usuario usuario = usuarioRepository.findById(id).orElseThrow(() -> new EntityNotFoundException("Usuario não encontrado " + id));
+        Usuario usuario = usuarioRepository.findById(id).orElseThrow(() -> new RecursoNaoEncontradoException("Usuario " + id + " não encontrado"));
         usuarioRepository.delete(usuario);
     }
 }
