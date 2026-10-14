@@ -2,10 +2,13 @@
 
 API de reserva de laboratórios usada para reproduzir, e depois corrigir, um problema de concorrência. Cada fase fica numa branch.
 
-| Fase | Branch | Status |
-|---|---|---|
-| 1. Reproduzir a condição de corrida | `fase-1/condicao-de-corrida` | ✅ concluída |
-| 2. Corrigir com lock pessimista | `fase-2/lock-pessimista` | ⏳ próxima |
+| Fase | Branch | Temas | Status |
+|---|---|---|---|
+| 1. Reproduzir a condição de corrida | `fase-1/condicao-de-corrida` | Tema 1 (check-then-act, `Read Committed`) e Tema 3 (`ExecutorService`, latch de largada, Postgres real) | concluída |
+| 2. Corrigir com lock pessimista | `fase-2/lock-pessimista` | Tema 2 e Tema 3 (`TransactionTemplate`, latches para forçar ordem entre threads) | próxima |
+| 3. Garantir no banco com constraint de exclusão | `fase-3/constraint-exclusao` | Restante do Tema 1 (`EXCLUDE USING gist`, `btree_gist`, `tstzrange`, constraint parcial, SQLState, flush, tradução para 409) | planejada |
+
+O Tema 3 não é uma fase própria: as técnicas de teste entram em cada fase, conforme o teste daquela fase precisa delas. O mesmo `ReservaConcorrenciaTest` é usado nas três fases, para comparar as soluções.
 
 ## Fase 1: condição de corrida (check-then-act)
 
@@ -22,14 +25,14 @@ Duas pessoas pedem o LAB-01 das 14h às 16h quase no mesmo instante. Cada requis
 
 | Tempo | Thread da Ana | Thread do Bruno | Banco |
 |---|---|---|---|
-| t1 | valida duração ✅ | | vazio |
-| t2 | busca laboratório ✅ | valida duração ✅ | vazio |
-| t3 | **`existeConflito` → false** | busca laboratório ✅ | vazio |
+| t1 | valida duração | | vazio |
+| t2 | busca laboratório | valida duração | vazio |
+| t3 | **`existeConflito` → false** | busca laboratório | vazio |
 | t4 | busca usuário | **`existeConflito` → false** | vazio |
 | t5 | monta a entidade | busca usuário | vazio |
 | t6 | **`save`** | monta a entidade | 1 reserva (Ana) |
 | t7 | devolve 201 | **`save`** | **2 reservas no mesmo horário** |
-| t8 | | devolve 201 | ❌ |
+| t8 | | devolve 201 | conflito: duas reservas no mesmo horário |
 
 No t4, o Bruno pergunta "está livre?" e a resposta é verdadeira naquele instante, porque a Ana ainda não salvou. Ele decide salvar com uma informação que fica desatualizada logo depois.
 
