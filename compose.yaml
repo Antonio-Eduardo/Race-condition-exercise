@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:17
+    container_name: lockpessimist-pg
+    environment:
+      POSTGRES_DB: lockpessimist
+      POSTGRES_USER: lockpessimist
+      POSTGRES_PASSWORD: lockpessimist
+    ports:
+      - "5432:5432"
+    volumes:
+      - lockpessimist-data:/var/lib/postgresql/data
+
+volumes:
+  lockpessimist-data:
